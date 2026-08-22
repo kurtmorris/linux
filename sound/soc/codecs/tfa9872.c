@@ -222,6 +222,7 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 	struct regmap *rmap;
 	unsigned int rev;
 	u32 channel_index = 0;
+	u32 slot_width;
 	int ret;
 
 	rmap = devm_regmap_init_i2c(i2c, &tfa987x_regmap_config);
@@ -261,18 +262,40 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 	regmap_update_bits(rmap, TFA987X_AUDIO_CTRL,
 				 TFA987X_AUDIO_CTRL_DPSA_MSK, 0);
 
-	/* Setup TDM 16 bit 1 slot config */
+	/*
+	 * Setup TDM 1 slot config. Slot width defaults to this chip's
+	 * traditional 16 bits; boards whose amp is wired for a wider TDM
+	 * link (32-bit slots, matching e.g. a machine driver that runs
+	 * MI2S at double rate) can opt in via the standard "dai-tdm-
+	 * slot-width" binding. FSBCLKS (TDM_CFG0, "N-BCKs in FS") must
+	 * move together with slot width; only the 16- and 32-bit values
+	 * are known (0 and 2 respectively, confirmed against a working
+	 * vendor container calibration) -- anything else falls back to
+	 * the 16-bit default rather than guessing.
+	 */
+	slot_width = 16;
+	of_property_read_u32(dev->of_node, "dai-tdm-slot-width", &slot_width);
+
+	if (slot_width != 16 && slot_width != 32) {
+		dev_warn(dev, "unsupported dai-tdm-slot-width %u, using 16\n",
+			 slot_width);
+		slot_width = 16;
+	}
+
 	regmap_update_bits(rmap, TFA987X_TDM_CFG0,
 				 TFA987X_TDM_CFG0_FSBCLKS_MSK,
-				 FIELD_PREP(TFA987X_TDM_CFG0_FSBCLKS_MSK, 0));
+				 FIELD_PREP(TFA987X_TDM_CFG0_FSBCLKS_MSK,
+					    slot_width == 32 ? 2 : 0));
 	regmap_update_bits(rmap, TFA987X_TDM_CFG1,
 				 TFA987X_TDM_CFG1_NSLOTS_MSK |
 				 TFA987X_TDM_CFG1_SLOTBITS_MSK,
 				 FIELD_PREP(TFA987X_TDM_CFG1_NSLOTS_MSK, 1) |
-				 FIELD_PREP(TFA987X_TDM_CFG1_SLOTBITS_MSK, 15));
+				 FIELD_PREP(TFA987X_TDM_CFG1_SLOTBITS_MSK,
+					    slot_width - 1));
 	regmap_update_bits(rmap, TFA987X_TDM_CFG2,
 				 TFA987X_TDM_CFG2_SWIDTH_MSK,
-				 FIELD_PREP(TFA987X_TDM_CFG2_SWIDTH_MSK, 15));
+				 FIELD_PREP(TFA987X_TDM_CFG2_SWIDTH_MSK,
+					    slot_width - 1));
 
 	/* No current/voltage sense over TDM */
 	regmap_update_bits(rmap, TFA987X_TDM_CFG3,
