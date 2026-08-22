@@ -16,7 +16,50 @@
 #include "usb_offload_utils.h"
 #include "sdw.h"
 
-#define MI2S_BCLK_RATE		1536000
+#define MI2S_BCLK_RATE_16BIT	1536000
+#define MI2S_BCLK_RATE_32BIT	3072000
+
+/*
+ * Most boards run MI2S at 16-bit slots (32 BCLK cycles for stereo at
+ * 48kHz). A few boards' speaker amps are wired for 32-bit TDM slots and
+ * need both the BCLK rate and the backend PCM format doubled to match --
+ * keyed off each board's own of_device_id entry below rather than
+ * changed unconditionally, since this machine driver is shared by
+ * several boards with their own speaker calibration.
+ */
+struct sm8250_platform_data {
+	const char *driver_name;
+	bool mi2s_32bit_slot;
+};
+
+static const struct sm8250_platform_data sm7225_data = {
+	.driver_name = "sm7225",
+};
+
+static const struct sm8250_platform_data qcm6490_data = {
+	.driver_name = "qcm6490",
+};
+
+static const struct sm8250_platform_data sm7325_data = {
+	.driver_name = "sm7325",
+};
+
+static const struct sm8250_platform_data qcm2290_data = {
+	.driver_name = "qcm2290",
+};
+
+static const struct sm8250_platform_data sm4250_data = {
+	.driver_name = "sm4250",
+};
+
+static const struct sm8250_platform_data sm8250_data = {
+	.driver_name = "sm8250",
+};
+
+static const struct sm8250_platform_data sm7325_nothing_spacewar_data = {
+	.driver_name = "sm7325",
+	.mi2s_32bit_slot = true,
+};
 
 struct sm8250_snd_data {
 	bool stream_prepared[AFE_PORT_MAX];
@@ -26,6 +69,7 @@ struct sm8250_snd_data {
 	bool usb_offload_jack_setup;
 	struct snd_soc_jack dp_jack;
 	bool jack_setup;
+	const struct sm8250_platform_data *pdata;
 };
 
 static int sm8250_snd_init(struct snd_soc_pcm_runtime *rtd)
@@ -58,6 +102,7 @@ static void sm8250_snd_exit(struct snd_soc_pcm_runtime *rtd)
 static int sm8250_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 				     struct snd_pcm_hw_params *params)
 {
+	struct sm8250_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
 	struct snd_interval *rate = hw_param_interval(params,
 					SNDRV_PCM_HW_PARAM_RATE);
 	struct snd_interval *channels = hw_param_interval(params,
@@ -66,9 +111,18 @@ static int sm8250_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 
 	rate->min = rate->max = 48000;
 	channels->min = channels->max = 2;
-	snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S16_LE);
+	snd_mask_set_format(fmt, data->pdata->mi2s_32bit_slot ?
+			     SNDRV_PCM_FORMAT_S32_LE : SNDRV_PCM_FORMAT_S16_LE);
 
 	return 0;
+}
+
+static unsigned int sm8250_mi2s_bclk_rate(struct snd_soc_pcm_runtime *rtd)
+{
+	struct sm8250_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
+
+	return data->pdata->mi2s_32bit_slot ?
+		MI2S_BCLK_RATE_32BIT : MI2S_BCLK_RATE_16BIT;
 }
 
 static int sm8250_snd_startup(struct snd_pcm_substream *substream)
@@ -84,7 +138,7 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 		codec_dai_fmt |= SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_I2S;
 		snd_soc_dai_set_sysclk(cpu_dai,
 			Q6AFE_LPASS_CLK_ID_PRI_MI2S_IBIT,
-			MI2S_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
+			sm8250_mi2s_bclk_rate(rtd), SNDRV_PCM_STREAM_PLAYBACK);
 		snd_soc_dai_set_fmt(cpu_dai, fmt);
 		snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
 		break;
@@ -92,7 +146,7 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 		codec_dai_fmt |= SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_I2S;
 		snd_soc_dai_set_sysclk(cpu_dai,
 			Q6AFE_LPASS_CLK_ID_SEC_MI2S_IBIT,
-			MI2S_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
+			sm8250_mi2s_bclk_rate(rtd), SNDRV_PCM_STREAM_PLAYBACK);
 		snd_soc_dai_set_fmt(cpu_dai, fmt);
 		snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
 		break;
@@ -100,7 +154,7 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 		codec_dai_fmt |= SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_I2S;
 		snd_soc_dai_set_sysclk(cpu_dai,
 			Q6AFE_LPASS_CLK_ID_TER_MI2S_IBIT,
-			MI2S_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
+			sm8250_mi2s_bclk_rate(rtd), SNDRV_PCM_STREAM_PLAYBACK);
 		snd_soc_dai_set_fmt(cpu_dai, fmt);
 		snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
 		break;
@@ -108,7 +162,7 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 		codec_dai_fmt |= SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_I2S;
 		snd_soc_dai_set_sysclk(cpu_dai,
 			Q6AFE_LPASS_CLK_ID_QUI_MI2S_IBIT,
-			MI2S_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
+			sm8250_mi2s_bclk_rate(rtd), SNDRV_PCM_STREAM_PLAYBACK);
 		snd_soc_dai_set_fmt(cpu_dai, fmt);
 		snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
 		break;
@@ -116,7 +170,7 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 		codec_dai_fmt |= SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_I2S;
 		snd_soc_dai_set_sysclk(cpu_dai,
 			Q6AFE_LPASS_CLK_ID_SEN_MI2S_IBIT,
-			MI2S_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
+			sm8250_mi2s_bclk_rate(rtd), SNDRV_PCM_STREAM_PLAYBACK);
 		snd_soc_dai_set_fmt(cpu_dai, fmt);
 		snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
 		break;
@@ -191,20 +245,22 @@ static int sm8250_platform_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	card->driver_name = of_device_get_match_data(dev);
+	data->pdata = of_device_get_match_data(dev);
+	card->driver_name = data->pdata->driver_name;
 	sm8250_add_be_ops(card);
 	return devm_snd_soc_register_card(dev, card);
 }
 
 static const struct of_device_id snd_sm8250_dt_match[] = {
-	{ .compatible = "fairphone,fp4-sndcard", .data = "sm7225" },
-	{ .compatible = "fairphone,fp5-sndcard", .data = "qcm6490" },
-	{ .compatible = "motorola,dubai-sndcard", .data = "sm7325" },
-	{ .compatible = "qcom,qrb2210-sndcard", .data = "qcm2290" },
-	{ .compatible = "qcom,qrb4210-rb2-sndcard", .data = "sm4250" },
-	{ .compatible = "qcom,qrb5165-rb5-sndcard", .data = "sm8250" },
-	{ .compatible = "qcom,sm8250-sndcard", .data = "sm8250" },
-	{ .compatible = "xiaomi,taoyao-sndcard", .data = "sm7325" },
+	{ .compatible = "fairphone,fp4-sndcard", .data = &sm7225_data },
+	{ .compatible = "fairphone,fp5-sndcard", .data = &qcm6490_data },
+	{ .compatible = "motorola,dubai-sndcard", .data = &sm7325_data },
+	{ .compatible = "nothing,spacewar-sndcard", .data = &sm7325_nothing_spacewar_data },
+	{ .compatible = "qcom,qrb2210-sndcard", .data = &qcm2290_data },
+	{ .compatible = "qcom,qrb4210-rb2-sndcard", .data = &sm4250_data },
+	{ .compatible = "qcom,qrb5165-rb5-sndcard", .data = &sm8250_data },
+	{ .compatible = "qcom,sm8250-sndcard", .data = &sm8250_data },
+	{ .compatible = "xiaomi,taoyao-sndcard", .data = &sm7325_data },
 	{}
 };
 
