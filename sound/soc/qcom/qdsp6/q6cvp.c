@@ -274,8 +274,8 @@ int q6cvp_send_media_format(struct q6voice_session *cvp, int port_id, bool is_tx
 	cmd.param_data.media_format_info.bits_per_sample = 16;
 	cmd.param_data.media_format_info.sample_rate = 48000;
 
-	q6dsp_map_channels(cmd.param_data.channel_info.channel_mapping,
-			   cmd.param_data.channel_info.num_channels);
+	q6dsp_map_channels(cmd.param_data.media_format_info.channel_mapping,
+			   cmd.param_data.media_format_info.num_channels);
 
 	return q6voice_common_send(cvp, &cmd.hdr);
 }
