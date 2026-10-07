@@ -8,6 +8,7 @@
 #include <linux/bitfield.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/regmap.h>
 #include <sound/soc.h>
 
@@ -85,16 +86,77 @@
 #define TFA9874_DCDC_CTRL6_DCVOF_MSK	GENMASK(8,  3)
 #define TFA9874_DCDC_CTRL6_DCVOS_MSK	GENMASK(14,  9)
 
+struct tfa987x_priv {
+	struct mutex lock;	/* protects unmuted, enabled and AMPE */
+	bool unmuted;	/* stream is unmuted */
+	bool enabled;	/* "Playback Switch": amp may run while unmuted */
+};
+
+/* Caller holds priv->lock. */
+static void tfa987x_update_ampe(struct snd_soc_component *component,
+				struct tfa987x_priv *priv)
+{
+	bool on = priv->unmuted && priv->enabled;
+
+	snd_soc_component_update_bits(component, TFA987X_SYS_CTRL0,
+				      TFA987X_SYS_CTRL0_AMPE_MSK,
+				      on ? TFA987X_SYS_CTRL0_AMPE_MSK : 0);
+}
+
+static int tfa987x_switch_get(struct snd_kcontrol *kcontrol,
+			      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct tfa987x_priv *priv = snd_soc_component_get_drvdata(component);
+
+	mutex_lock(&priv->lock);
+	ucontrol->value.integer.value[0] = priv->enabled;
+	mutex_unlock(&priv->lock);
+
+	return 0;
+}
+
+static int tfa987x_switch_put(struct snd_kcontrol *kcontrol,
+			      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct tfa987x_priv *priv = snd_soc_component_get_drvdata(component);
+	bool enabled = !!ucontrol->value.integer.value[0];
+	int changed;
+
+	mutex_lock(&priv->lock);
+	changed = enabled != priv->enabled;
+	if (changed) {
+		priv->enabled = enabled;
+		tfa987x_update_ampe(component, priv);
+	}
+	mutex_unlock(&priv->lock);
+
+	return changed;
+}
+
+static const struct snd_kcontrol_new tfa987x_controls[] = {
+	{
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Playback Switch",
+		.info = snd_ctl_boolean_mono_info,
+		.get = tfa987x_switch_get,
+		.put = tfa987x_switch_put,
+	},
+};
+
 static int tfa987x_digital_mute(struct snd_soc_dai *codec_dai, int mute, int stream)
 {
 	struct snd_soc_component *component = codec_dai->component;
-	int val = mute ? 0 : TFA987X_SYS_CTRL0_AMPE_MSK;
+	struct tfa987x_priv *priv = snd_soc_component_get_drvdata(component);
 
 	if (stream != SNDRV_PCM_STREAM_PLAYBACK)
 		return 0;
 
-	snd_soc_component_update_bits(component, TFA987X_SYS_CTRL0,
-						 TFA987X_SYS_CTRL0_AMPE_MSK, val);
+	mutex_lock(&priv->lock);
+	priv->unmuted = !mute;
+	tfa987x_update_ampe(component, priv);
+	mutex_unlock(&priv->lock);
 
 	return 0;
 }
@@ -110,6 +172,8 @@ static const struct snd_soc_dapm_route tfa987x_dapm_routes[] = {
 };
 
 static const struct snd_soc_component_driver tfa987x_component = {
+	.controls		= tfa987x_controls,
+	.num_controls		= ARRAY_SIZE(tfa987x_controls),
 	.dapm_widgets		= tfa987x_dapm_widgets,
 	.num_dapm_widgets	= ARRAY_SIZE(tfa987x_dapm_widgets),
 	.dapm_routes		= tfa987x_dapm_routes,
@@ -220,11 +284,22 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 {
 	struct device *dev = &i2c->dev;
 	struct snd_soc_dai_driver *dai;
+	struct tfa987x_priv *priv;
 	struct regmap *rmap;
 	unsigned int rev;
 	u32 channel_index = 0;
 	u32 slot_width;
 	int ret;
+
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	priv->enabled = true;
+	ret = devm_mutex_init(dev, &priv->lock);
+	if (ret)
+		return ret;
+	i2c_set_clientdata(i2c, priv);
 
 	rmap = devm_regmap_init_i2c(i2c, &tfa987x_regmap_config);
 	if (IS_ERR(rmap))
