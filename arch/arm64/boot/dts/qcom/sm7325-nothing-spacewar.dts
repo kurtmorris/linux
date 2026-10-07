@@ -1057,6 +1057,10 @@
 		reg = <0x34>;
 		reset-gpio = <&tlmm 101 GPIO_ACTIVE_HIGH>;
 
+		dai-tdm-slot-width = <32>;
+		sound-channel = <0>;
+		sound-name-prefix = "EAR";
+
 		#sound-dai-cells = <1>;
 	};
 
@@ -1065,6 +1069,10 @@
 			     "nxp,tfa9872";
 		reg = <0x35>;
 		reset-gpio = <&tlmm 101 GPIO_ACTIVE_HIGH>;
+
+		dai-tdm-slot-width = <32>;
+		sound-channel = <1>;
+		sound-name-prefix = "SPK";
 
 		#sound-dai-cells = <1>;
 	};
@@ -1470,8 +1478,7 @@
 };
 
 &sound {
-	compatible = "qcom,sm7325-sndcard",
-		     "qcom,sm8250-sndcard";
+	compatible = "nothing,spacewar-sndcard";
 
 	model = "NP1";
 
